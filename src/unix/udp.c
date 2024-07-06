@@ -147,6 +147,20 @@ static void uv__udp_io(uv_loop_t* loop, uv__io_t* w, unsigned int revents) {
   }
 }
 
+static void clear__socket_error(uv_udp_t* handle) {
+  #if defined(__linux__) && defined(MSG_ERRQUEUE)
+  if (handle->flags & UV_HANDLE_UDP_RECVERR) {
+    struct msghdr h;
+    char dummy[1];
+    uv_buf_t buf = uv_buf_init(dummy, 1);
+    memset(&h, 0, sizeof(h));
+    h.msg_iov = (void*) &buf;
+    h.msg_iovlen = 1;
+    recvmsg(handle->io_watcher.fd, &h, MSG_ERRQUEUE);
+  }
+  #endif
+}
+
 static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
 #if defined(__linux__) || defined(__FreeBSD__)
   struct sockaddr_in6 peers[20];
@@ -184,6 +198,9 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
       handle->recv_cb(handle, 0, buf, NULL, 0);
     else
       handle->recv_cb(handle, UV__ERR(errno), buf, NULL, 0);
+    if (nread == -1) {
+      clear__socket_error(handle);
+    }
   } else {
     /* pass each chunk to the application */
     for (k = 0; k < (size_t) nread && handle->recv_cb != NULL; k++) {
@@ -254,10 +271,26 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
     while (nread == -1 && errno == EINTR);
 
     if (nread == -1) {
+      #if defined(__linux__) && defined(MSG_ERRQUEUE)
+      if (handle->flags & UV_HANDLE_UDP_RECVERR) {
+        nread = recvmsg(handle->io_watcher.fd, &h, MSG_ERRQUEUE);
+        if (nread >= 0 && h.msg_flags & MSG_ERRQUEUE) {
+          struct cmsghdr *cmsg; = CMSG_FIRSTHDR(&h);
+          if (cmsg && cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) {
+            struct sock_extended_err *e = (struct sock_extended_err *)CMSG_DATA(cmsg);
+            flags = UV_UDP_RECVERR;
+            if (h.msg_flags & MSG_TRUNC)
+              flags |= UV_UDP_PARTIAL;
+            handle->recv_cb(handle, UV__ERR(e->ee_errno), &buf, (const struct sockaddr*) &peer, flags);
+            continue;
+          }
+        }
+      }
+      #endif
       if (errno == EAGAIN || errno == EWOULDBLOCK)
         handle->recv_cb(handle, 0, &buf, NULL, 0);
       else
-        handle->recv_cb(handle, UV__ERR(errno), &buf, NULL, 0);
+        handle->recv_cb(handle, UV__ERR(errno), &buf, NULL, 0);      
     }
     else {
       flags = 0;
@@ -528,6 +561,7 @@ int uv__udp_bind(uv_udp_t* handle,
     err = uv__set_recverr(fd, addr->sa_family);
     if (err)
       return err;
+    handle->flags |= UV_HANDLE_UDP_RECVERR;
   }
 
   if (flags & UV_UDP_REUSEADDR) {

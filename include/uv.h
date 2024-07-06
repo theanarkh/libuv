@@ -700,7 +700,12 @@ enum uv_udp_flags {
   /*
    * Indicates that recvmmsg should be used, if available.
    */
-  UV_UDP_RECVMMSG = 256
+  UV_UDP_RECVMMSG = 256,
+
+  /*
+   * Indicates that receive an ICMP error message, if available.
+   */
+  UV_UDP_RECVERR = 512
 };
 
 typedef void (*uv_udp_send_cb)(uv_udp_send_t* req, int status);

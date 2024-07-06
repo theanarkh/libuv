@@ -79,6 +79,11 @@ Data types
              * Indicates that recvmmsg should be used, if available.
              */
             UV_UDP_RECVMMSG = 256
+
+            /*
+             * Indicates that receive an ICMP error message, if available.
+             */
+            UV_UDP_RECVERR = 512
         };
 
 .. c:type:: void (*uv_udp_send_cb)(uv_udp_send_t* req, int status)
